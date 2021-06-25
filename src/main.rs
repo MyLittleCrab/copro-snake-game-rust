@@ -17,6 +17,7 @@ use std::rc::Rc;
 const HALF_CELL_SIZE: f64 = 5.0;
 const STEP_MULTIPLICATOR: f64 = 100.0;
 const GROW_MULTIPLICATOR: i64 = 4;
+const INITIAL_SIZE: usize = 25;
 
 #[derive(Copy, Clone, Debug)]
 enum Direction {
@@ -80,8 +81,11 @@ struct Snake {
 impl Snake {
     fn new(app_state: Rc<RefCell<AppState>>) -> Snake {
         let snake_chain = ChainLink::new(0.0, 0.0, ChainType::Snake);
-        let mut chain: VecDeque<ChainLink> = VecDeque::new();
-        chain.push_back(snake_chain);
+        let mut chain: VecDeque<ChainLink> = VecDeque::with_capacity(INITIAL_SIZE * 4);
+
+        for _ in 0..INITIAL_SIZE {
+            chain.push_back(snake_chain);
+        }
 
         Snake {
             chain,
@@ -112,6 +116,7 @@ impl Snake {
 
             self.chain
                 .push_front(ChainLink::new(new_x, new_y, ChainType::Snake));
+
             self.find_something_to_eat();
 
             if self.growth == 0 && self.poop == 0 {

@@ -24,7 +24,7 @@ const INITIAL_HP: i64 = 3;
 const POISON_DROP_CHANCE: i64 = 20; //%
 const POISON_DROP_CHANCE_RANGE_NEXT: i64 = POISON_DROP_CHANCE + 1;
 const HEAL_DROP_CHANCE: i64 = 7; // %
-const HEAL_DROP_CHANCE_RANGE_TO: i64 = POISON_DROP_CHANCE_RANGE_NEXT + HEAL_DROP_CHANCE; 
+const HEAL_DROP_CHANCE_RANGE_TO: i64 = POISON_DROP_CHANCE_RANGE_NEXT + HEAL_DROP_CHANCE;
 // const HEAL_DROP_CHANCE_RANGE_NEXT: i64 = HEAL_DROP_CHANCE + 1;
 
 const POOPING_CHANCE: i64 = 7; // 0.x%
@@ -44,6 +44,20 @@ enum Direction {
     Down,
     Left,
     Right,
+}
+
+impl Direction {
+    fn is_invert(&self, other: &Direction) -> bool {
+        if (matches!(self, Direction::Up) && matches!(other, Direction::Down))
+            || (matches!(self , Direction::Down) && matches!(other , Direction::Up))
+            || (matches!(self , Direction::Left) && matches!(other , Direction::Right))
+            || (matches!(self , Direction::Right) && matches!(other , Direction::Left))
+        {
+            return true;
+        } else {
+            return false;
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -107,7 +121,7 @@ struct Snake {
     poop: i64,
     app_state: Rc<RefCell<AppState>>,
     hp: i64,
-    rnd: ThreadRng
+    rnd: ThreadRng,
 }
 
 impl Snake {
@@ -126,12 +140,14 @@ impl Snake {
             poop: 0,
             app_state,
             hp: INITIAL_HP,
-            rnd: rand::thread_rng()
+            rnd: rand::thread_rng(),
         }
     }
 
     fn new_direction(&mut self, direction: Direction) {
-        self.direction = direction;
+        if !self.direction.is_invert(&direction){
+            self.direction = direction;
+        }
     }
 
     fn make_step(&mut self, step_size: f64) {
@@ -171,7 +187,9 @@ impl Snake {
                 if let Some(mut tail_ref) = tail {
                     let chain_type = match self.rnd.gen_range(0..100) {
                         0..=POISON_DROP_CHANCE => ChainType::Poison,
-                        POISON_DROP_CHANCE_RANGE_NEXT..=HEAL_DROP_CHANCE_RANGE_TO => ChainType::Heal,
+                        POISON_DROP_CHANCE_RANGE_NEXT..=HEAL_DROP_CHANCE_RANGE_TO => {
+                            ChainType::Heal
+                        }
                         _ => ChainType::Poop,
                     };
 
@@ -225,7 +243,7 @@ impl Snake {
         self.hp <= 0
     }
 
-    fn shit_generation(&mut self){
+    fn shit_generation(&mut self) {
         let random: i64 = self.rnd.gen_range(1..1000);
 
         if let 0..=POOPING_CHANCE = random {
@@ -335,7 +353,6 @@ impl App<'_> {
             _ => {}
         }
     }
-
 }
 
 fn main() {

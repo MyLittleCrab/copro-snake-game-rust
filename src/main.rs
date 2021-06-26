@@ -19,8 +19,10 @@ use std::rc::Rc;
 const HALF_CELL_SIZE: f64 = 5.0;
 const STEP_MULTIPLICATOR: f64 = 100.0;
 const GROW_MULTIPLICATOR: i64 = 4;
+const STEPS_WITHOUT_ROTATION: i64 = 15;
 const INITIAL_SIZE: usize = 12;
 const INITIAL_HP: i64 = 3;
+
 const POISON_DROP_CHANCE: i64 = 20; //%
 const POISON_DROP_CHANCE_RANGE_NEXT: i64 = POISON_DROP_CHANCE + 1;
 const HEAL_DROP_CHANCE: i64 = 7; // %
@@ -49,9 +51,9 @@ enum Direction {
 impl Direction {
     fn is_invert(&self, other: &Direction) -> bool {
         if (matches!(self, Direction::Up) && matches!(other, Direction::Down))
-            || (matches!(self , Direction::Down) && matches!(other , Direction::Up))
-            || (matches!(self , Direction::Left) && matches!(other , Direction::Right))
-            || (matches!(self , Direction::Right) && matches!(other , Direction::Left))
+            || (matches!(self, Direction::Down) && matches!(other, Direction::Up))
+            || (matches!(self, Direction::Left) && matches!(other, Direction::Right))
+            || (matches!(self, Direction::Right) && matches!(other, Direction::Left))
         {
             return true;
         } else {
@@ -121,6 +123,8 @@ struct Snake {
     poop: i64,
     app_state: Rc<RefCell<AppState>>,
     hp: i64,
+    cannot_rotate_steps: i64,
+    deffered_rotation: Direction,
     rnd: ThreadRng,
 }
 
@@ -141,24 +145,42 @@ impl Snake {
             app_state,
             hp: INITIAL_HP,
             rnd: rand::thread_rng(),
+            cannot_rotate_steps: 0,
+            deffered_rotation: Direction::None,
         }
     }
 
     fn new_direction(&mut self, direction: Direction) {
-        if !self.direction.is_invert(&direction){
-            self.direction = direction;
+        if !self.direction.is_invert(&direction) {
+            if self.cannot_rotate_steps <= 0 {
+                self.direction = direction;
+                self.cannot_rotate_steps = STEPS_WITHOUT_ROTATION;
+            } else {
+                self.deffered_rotation = direction;
+            }
+        }
+    }
+
+    fn make_deffered_rotation(&mut self) {
+        if !matches!(self.deffered_rotation, Direction::None) && self.cannot_rotate_steps <= 0 {
+            if !self.direction.is_invert(&self.deffered_rotation) {
+                self.direction = self.deffered_rotation;
+            }
+            self.deffered_rotation = Direction::None;
         }
     }
 
     fn make_step(&mut self, step_size: f64) {
-        if self.is_dead() {
+        if self.is_dead() || matches!(self.direction, Direction::None) {
             return;
         }
-
         let old_head = self.chain.front();
         if let Some(old_head_ref) = old_head {
             let mut new_y = old_head_ref.y;
             let mut new_x = old_head_ref.x;
+
+            self.cannot_rotate_steps -= 1;
+            self.make_deffered_rotation();
 
             match self.direction {
                 Direction::Up => new_y -= step_size * STEP_MULTIPLICATOR,

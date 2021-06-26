@@ -126,6 +126,7 @@ struct Snake {
     cannot_rotate_steps: i64,
     deffered_rotation: Direction,
     rnd: ThreadRng,
+    score: i64,
 }
 
 impl Snake {
@@ -147,6 +148,7 @@ impl Snake {
             rnd: rand::thread_rng(),
             cannot_rotate_steps: 0,
             deffered_rotation: Direction::None,
+            score: 0,
         }
     }
 
@@ -174,51 +176,48 @@ impl Snake {
         if self.is_dead() || matches!(self.direction, Direction::None) {
             return;
         }
-        let old_head = self.chain.front();
-        if let Some(old_head_ref) = old_head {
-            let mut new_y = old_head_ref.y;
-            let mut new_x = old_head_ref.x;
+        let old_head = self.chain.front().unwrap();
 
-            self.cannot_rotate_steps -= 1;
-            self.make_deffered_rotation();
+        let mut new_y = old_head.y;
+        let mut new_x = old_head.x;
 
-            match self.direction {
-                Direction::Up => new_y -= step_size * STEP_MULTIPLICATOR,
-                Direction::Down => new_y += step_size * STEP_MULTIPLICATOR,
-                Direction::Left => new_x -= step_size * STEP_MULTIPLICATOR,
-                Direction::Right => new_x += step_size * STEP_MULTIPLICATOR,
-                _ => {}
-            }
+        self.cannot_rotate_steps -= 1;
+        self.make_deffered_rotation();
 
-            self.chain
-                .push_front(ChainLink::new(new_x, new_y, ChainType::Snake));
+        match self.direction {
+            Direction::Up => new_y -= step_size * STEP_MULTIPLICATOR,
+            Direction::Down => new_y += step_size * STEP_MULTIPLICATOR,
+            Direction::Left => new_x -= step_size * STEP_MULTIPLICATOR,
+            Direction::Right => new_x += step_size * STEP_MULTIPLICATOR,
+            _ => {}
+        }
 
-            self.find_something_to_eat();
-            self.check_collision_with_tail();
-            self.shit_generation();
+        self.chain
+            .push_front(ChainLink::new(new_x, new_y, ChainType::Snake));
 
-            // dropping tail business logic
-            if self.growth == 0 && self.poop == 0 {
-                self.chain.pop_back();
-            } else if self.growth > 0 {
-                self.growth -= 1;
-            } else if self.poop > 0 {
-                self.poop -= 1;
+        self.find_something_to_eat();
+        self.check_collision_with_tail();
+        self.shit_generation();
 
-                let tail = self.chain.pop_back();
-                if let Some(mut tail_ref) = tail {
-                    let chain_type = match self.rnd.gen_range(0..100) {
-                        0..=POISON_DROP_CHANCE => ChainType::Poison,
-                        POISON_DROP_CHANCE_RANGE_NEXT..=HEAL_DROP_CHANCE_RANGE_TO => {
-                            ChainType::Heal
-                        }
-                        _ => ChainType::Poop,
-                    };
+        // dropping tail business logic
+        if self.growth == 0 && self.poop == 0 {
+            self.chain.pop_back();
+        } else if self.growth > 0 {
+            self.growth -= 1;
+        } else if self.poop > 0 {
+            self.poop -= 1;
 
-                    let mut app_state = self.app_state.borrow_mut();
-                    tail_ref.t = chain_type;
-                    app_state.add_item_to_map(tail_ref);
-                }
+            let tail = self.chain.pop_back();
+            if let Some(mut tail_ref) = tail {
+                let chain_type = match self.rnd.gen_range(0..100) {
+                    0..=POISON_DROP_CHANCE => ChainType::Poison,
+                    POISON_DROP_CHANCE_RANGE_NEXT..=HEAL_DROP_CHANCE_RANGE_TO => ChainType::Heal,
+                    _ => ChainType::Poop,
+                };
+
+                let mut app_state = self.app_state.borrow_mut();
+                tail_ref.t = chain_type;
+                app_state.add_item_to_map(tail_ref);
             }
         }
     }
@@ -240,6 +239,7 @@ impl Snake {
                     ChainType::Heal => self.hp += 1,
                     _ => {}
                 }
+                self.score += 1;
                 app_state.all_items_on_map.remove(index);
             }
         }
@@ -343,8 +343,19 @@ impl App<'_> {
             }
 
             let header = format!("COPRO SNAKE {} HP", snake.hp);
-
             text(BLACK, 15, &header, font, c.transform.trans(30.0, 30.0), gl).unwrap();
+
+
+            let score_header = format!("SCORE: {}", snake.score);
+            text(
+                BLACK,
+                15,
+                &score_header,
+                font,
+                c.transform.trans(20.0, 380.0),
+                gl,
+            )
+            .unwrap();
 
             if snake.is_dead() {
                 text(

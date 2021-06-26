@@ -1,14 +1,13 @@
 [package]
 
-name = "spinning-square"
+name = "copro-snake"
 version = "0.1.0"
 authors = [
-    "TyOverby <ty@pre-alpha.com>",
-    "Nikita Pekin <contact@nikitapek.in>"
+    "Roman A. Nosov <roman@nosoff.info>"
 ]
 
 [[bin]]
-name = "spinning-square"
+name = "copro-snake"
 
 [dependencies]
 piston = "0.53.0"

@@ -22,6 +22,12 @@ const GROW_MULTIPLICATOR: i64 = 4;
 const INITIAL_SIZE: usize = 12;
 const INITIAL_HP: i64 = 3;
 const POISON_DROP_CHANCE: i64 = 20; //%
+const POISON_DROP_CHANCE_RANGE_NEXT: i64 = POISON_DROP_CHANCE + 1;
+const HEAL_DROP_CHANCE: i64 = 7; // %
+const HEAL_DROP_CHANCE_RANGE_TO: i64 = POISON_DROP_CHANCE_RANGE_NEXT + HEAL_DROP_CHANCE; 
+// const HEAL_DROP_CHANCE_RANGE_NEXT: i64 = HEAL_DROP_CHANCE + 1;
+
+const POOPING_CHANCE: i64 = 7; // 0.x%
 const INVULNERABILITY_THRESHOLD: usize = 50;
 
 const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
@@ -44,7 +50,7 @@ enum Direction {
 enum ChainType {
     Snake,
     Poop,
-    Wall,
+    Heal,
     Poison,
 }
 
@@ -54,7 +60,7 @@ impl ChainType {
             ChainType::Poop => BROWN,
             ChainType::Snake => BLUE,
             ChainType::Poison => GREEN,
-            ChainType::Wall => RED,
+            ChainType::Heal => RED,
         }
     }
 }
@@ -101,6 +107,7 @@ struct Snake {
     poop: i64,
     app_state: Rc<RefCell<AppState>>,
     hp: i64,
+    rnd: ThreadRng
 }
 
 impl Snake {
@@ -119,6 +126,7 @@ impl Snake {
             poop: 0,
             app_state,
             hp: INITIAL_HP,
+            rnd: rand::thread_rng()
         }
     }
 
@@ -149,7 +157,9 @@ impl Snake {
 
             self.find_something_to_eat();
             self.check_collision_with_tail();
+            self.shit_generation();
 
+            // dropping tail business logic
             if self.growth == 0 && self.poop == 0 {
                 self.chain.pop_back();
             } else if self.growth > 0 {
@@ -159,10 +169,9 @@ impl Snake {
 
                 let tail = self.chain.pop_back();
                 if let Some(mut tail_ref) = tail {
-                    let mut rng = rand::thread_rng();
-                    let random: i64 = rng.gen_range(1..100);
-                    let chain_type = match random {
+                    let chain_type = match self.rnd.gen_range(0..100) {
                         0..=POISON_DROP_CHANCE => ChainType::Poison,
+                        POISON_DROP_CHANCE_RANGE_NEXT..=HEAL_DROP_CHANCE_RANGE_TO => ChainType::Heal,
                         _ => ChainType::Poop,
                     };
 
@@ -187,7 +196,8 @@ impl Snake {
                 let finded_item = app_state.all_items_on_map.get(index).unwrap();
                 match finded_item.t {
                     ChainType::Poop => self.growth += GROW_MULTIPLICATOR,
-                    ChainType::Poison | ChainType::Wall => self.hp -= 1,
+                    ChainType::Poison => self.hp -= 1,
+                    ChainType::Heal => self.hp += 1,
                     _ => {}
                 }
                 app_state.all_items_on_map.remove(index);
@@ -213,6 +223,14 @@ impl Snake {
 
     fn is_dead(&self) -> bool {
         self.hp <= 0
+    }
+
+    fn shit_generation(&mut self){
+        let random: i64 = self.rnd.gen_range(1..1000);
+
+        if let 0..=POOPING_CHANCE = random {
+            self.poop += 1;
+        }
     }
 }
 
@@ -312,11 +330,12 @@ impl App<'_> {
             Button::Keyboard(Key::Down) => self.snake.new_direction(Direction::Down),
             Button::Keyboard(Key::Left) => self.snake.new_direction(Direction::Left),
             Button::Keyboard(Key::Right) => self.snake.new_direction(Direction::Right),
-            Button::Keyboard(Key::Space) => self.snake.growth += 1,
-            Button::Keyboard(Key::Return) => self.snake.poop += 1,
+            Button::Keyboard(Key::Space) => self.snake = Snake::new(self.app_state.clone()),
+            // Button::Keyboard(Key::Return) => self.snake.poop += 1,
             _ => {}
         }
     }
+
 }
 
 fn main() {

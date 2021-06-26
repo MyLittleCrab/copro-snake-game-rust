@@ -2,22 +2,34 @@ extern crate glutin_window;
 extern crate graphics;
 extern crate opengl_graphics;
 extern crate piston;
+extern crate rand;
 
 use glutin_window::GlutinWindow as Window;
-use opengl_graphics::{GlGraphics, OpenGL};
+use opengl_graphics::*;
 use piston::event_loop::{EventSettings, Events};
 use piston::input::{Button, Key, PressEvent, RenderArgs, RenderEvent, UpdateArgs, UpdateEvent};
 use piston::window::WindowSettings;
 use piston::EventLoop;
+use rand::prelude::*;
 use std::cell::RefCell;
-// use std::cell::RefMut;
 use std::collections::VecDeque;
+use std::ptr;
 use std::rc::Rc;
 
 const HALF_CELL_SIZE: f64 = 5.0;
 const STEP_MULTIPLICATOR: f64 = 100.0;
 const GROW_MULTIPLICATOR: i64 = 4;
-const INITIAL_SIZE: usize = 25;
+const INITIAL_SIZE: usize = 12;
+const INITIAL_HP: i64 = 3;
+const POISON_DROP_CHANCE: i64 = 20; //%
+const INVULNERABILITY_THRESHOLD: usize = 50;
+
+const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+const BROWN: [f32; 4] = [0.76, 0.33, 0.08, 1.0];
 
 #[derive(Copy, Clone, Debug)]
 enum Direction {
@@ -32,7 +44,19 @@ enum Direction {
 enum ChainType {
     Snake,
     Poop,
-    // Wall
+    Wall,
+    Poison,
+}
+
+impl ChainType {
+    fn get_color(&self) -> [f32; 4] {
+        match self {
+            ChainType::Poop => BROWN,
+            ChainType::Snake => BLUE,
+            ChainType::Poison => GREEN,
+            ChainType::Wall => RED,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -76,6 +100,7 @@ struct Snake {
     growth: i64,
     poop: i64,
     app_state: Rc<RefCell<AppState>>,
+    hp: i64,
 }
 
 impl Snake {
@@ -93,6 +118,7 @@ impl Snake {
             growth: 0,
             poop: 0,
             app_state,
+            hp: INITIAL_HP,
         }
     }
 
@@ -101,6 +127,10 @@ impl Snake {
     }
 
     fn make_step(&mut self, step_size: f64) {
+        if self.is_dead() {
+            return;
+        }
+
         let old_head = self.chain.front();
         if let Some(old_head_ref) = old_head {
             let mut new_y = old_head_ref.y;
@@ -118,6 +148,7 @@ impl Snake {
                 .push_front(ChainLink::new(new_x, new_y, ChainType::Snake));
 
             self.find_something_to_eat();
+            self.check_collision_with_tail();
 
             if self.growth == 0 && self.poop == 0 {
                 self.chain.pop_back();
@@ -125,10 +156,18 @@ impl Snake {
                 self.growth -= 1;
             } else if self.poop > 0 {
                 self.poop -= 1;
+
                 let tail = self.chain.pop_back();
                 if let Some(mut tail_ref) = tail {
+                    let mut rng = rand::thread_rng();
+                    let random: i64 = rng.gen_range(1..100);
+                    let chain_type = match random {
+                        0..=POISON_DROP_CHANCE => ChainType::Poison,
+                        _ => ChainType::Poop,
+                    };
+
                     let mut app_state = self.app_state.borrow_mut();
-                    tail_ref.t = ChainType::Poop;
+                    tail_ref.t = chain_type;
                     app_state.add_item_to_map(tail_ref);
                 }
             }
@@ -145,17 +184,36 @@ impl Snake {
                 .iter()
                 .position(|item| head_ref.intersects(item))
             {
-                self.growth += GROW_MULTIPLICATOR;
+                let finded_item = app_state.all_items_on_map.get(index).unwrap();
+                match finded_item.t {
+                    ChainType::Poop => self.growth += GROW_MULTIPLICATOR,
+                    ChainType::Poison | ChainType::Wall => self.hp -= 1,
+                    _ => {}
+                }
                 app_state.all_items_on_map.remove(index);
             }
         }
     }
-}
 
-struct App {
-    gl: GlGraphics,
-    snake: Snake,
-    app_state: Rc<RefCell<AppState>>,
+    fn check_collision_with_tail(&mut self) {
+        let head = self.chain.front();
+        if let Some(head_ref) = head {
+            if self
+                .chain
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| i > INVULNERABILITY_THRESHOLD)
+                .position(|(_, item)| !ptr::eq(head_ref, item) && head_ref.intersects(item))
+                .is_some()
+            {
+                self.hp = 0;
+            }
+        }
+    }
+
+    fn is_dead(&self) -> bool {
+        self.hp <= 0
+    }
 }
 
 #[derive(Clone)]
@@ -175,21 +233,39 @@ impl AppState {
     }
 }
 
-impl App {
+struct App<'a> {
+    gl: GlGraphics,
+    snake: Snake,
+    app_state: Rc<RefCell<AppState>>,
+    font: GlyphCache<'a>,
+}
+
+impl App<'_> {
+    fn new(gl: GlGraphics, snake: Snake, app_state: Rc<RefCell<AppState>>) -> App<'static> {
+        App {
+            gl,
+            snake,
+            app_state,
+            font: opengl_graphics::GlyphCache::new(
+                "./assets/PressStart2P-Regular.ttf",
+                (),
+                TextureSettings::new(),
+            )
+            .unwrap(),
+        }
+    }
+
     fn render(&mut self, args: &RenderArgs) {
         use graphics::*;
 
-        const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
-        const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
-        const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
         let rect: [f64; 4] = rectangle::square(0.0, 0.0, 10.0);
 
         let snake = &self.snake;
         let app_state = &self.app_state;
-
+        let font = &mut self.font;
         self.gl.draw(args.viewport(), |c, gl| {
             // Clear the screen.
-            clear(GREEN, gl);
+            clear(WHITE, gl);
 
             for snake_item in snake.chain.iter() {
                 let transform = c
@@ -197,7 +273,7 @@ impl App {
                     .trans(snake_item.x, snake_item.y)
                     .trans(HALF_CELL_SIZE, HALF_CELL_SIZE);
 
-                rectangle(BLUE, rect, transform, gl);
+                rectangle(snake_item.t.get_color(), rect, transform, gl);
             }
 
             for item in app_state.borrow().all_items_on_map.iter() {
@@ -205,14 +281,41 @@ impl App {
                     .transform
                     .trans(item.x, item.y)
                     .trans(HALF_CELL_SIZE, HALF_CELL_SIZE);
+                rectangle(item.t.get_color(), rect, transform, gl);
+            }
 
-                rectangle(RED, rect, transform, gl);
+            let header = format!("COPRO SNAKE {} HP", snake.hp);
+
+            text(BLACK, 15, &header, font, c.transform.trans(30.0, 30.0), gl).unwrap();
+
+            if snake.is_dead() {
+                text(
+                    BLACK,
+                    30,
+                    "GAME OVER",
+                    font,
+                    c.transform.trans(30.0, 70.0),
+                    gl,
+                )
+                .unwrap();
             }
         });
     }
 
     fn update(&mut self, args: &UpdateArgs) {
         self.snake.make_step(args.dt);
+    }
+
+    fn btn_press(&mut self, button: &Button) {
+        match button {
+            Button::Keyboard(Key::Up) => self.snake.new_direction(Direction::Up),
+            Button::Keyboard(Key::Down) => self.snake.new_direction(Direction::Down),
+            Button::Keyboard(Key::Left) => self.snake.new_direction(Direction::Left),
+            Button::Keyboard(Key::Right) => self.snake.new_direction(Direction::Right),
+            Button::Keyboard(Key::Space) => self.snake.growth += 1,
+            Button::Keyboard(Key::Return) => self.snake.poop += 1,
+            _ => {}
+        }
     }
 }
 
@@ -227,12 +330,7 @@ fn main() {
 
     let app_state = Rc::new(RefCell::new(AppState::new()));
     let snake = Snake::new(app_state.clone());
-
-    let mut app = App {
-        gl: GlGraphics::new(opengl),
-        snake,
-        app_state,
-    };
+    let mut app = App::new(GlGraphics::new(opengl), snake, app_state);
 
     let mut settings = EventSettings::new();
     settings.set_max_fps(30);
@@ -248,15 +346,7 @@ fn main() {
         }
 
         if let Some(button) = e.press_args() {
-            match button {
-                Button::Keyboard(Key::Up) => app.snake.new_direction(Direction::Up),
-                Button::Keyboard(Key::Down) => app.snake.new_direction(Direction::Down),
-                Button::Keyboard(Key::Left) => app.snake.new_direction(Direction::Left),
-                Button::Keyboard(Key::Right) => app.snake.new_direction(Direction::Right),
-                Button::Keyboard(Key::Space) => app.snake.growth += 1,
-                Button::Keyboard(Key::Return) => app.snake.poop += 1,
-                _ => {}
-            }
+            app.btn_press(&button);
         }
     }
 }

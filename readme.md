@@ -13,6 +13,7 @@ Rendering through **Piston** library with opengl backend.
 
 1. up/down/left/right -> movement
 2. space -> spawn new snake
+3. enter -> full restart the game
 
 ## Items on the screen:
 

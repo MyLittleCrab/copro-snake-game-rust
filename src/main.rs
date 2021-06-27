@@ -256,7 +256,7 @@ impl Snake {
         {
             let app_state = self.app_state.borrow();
             let item_option = app_state
-                .all_items_on_map
+                .map_objects
                 .iter()
                 .find(|item| head.intersects(item));
 
@@ -273,7 +273,7 @@ impl Snake {
             }
             self.score += 1;
             let mut app_state = self.app_state.borrow_mut();
-            app_state.all_items_on_map.remove(&item);
+            app_state.map_objects.remove(&item);
         }
     }
 
@@ -307,18 +307,18 @@ impl Snake {
 
 #[derive(Clone)]
 struct AppState {
-    all_items_on_map: BTreeSet<ChainLink>,
+    map_objects: BTreeSet<ChainLink>,
 }
 
 impl AppState {
     fn new() -> AppState {
         AppState {
-            all_items_on_map: BTreeSet::new(),
+            map_objects: BTreeSet::new(),
         }
     }
 
     fn add_item_to_map(&mut self, item: ChainLink) {
-        self.all_items_on_map.insert(item);
+        self.map_objects.insert(item);
     }
 }
 
@@ -365,7 +365,7 @@ impl App<'_> {
                 rectangle(snake_item.t.get_color(), rect, transform, gl);
             }
 
-            for item in app_state.borrow().all_items_on_map.iter() {
+            for item in app_state.borrow().map_objects.iter() {
                 let transform = c
                     .transform
                     .trans(item.x, item.y)
@@ -412,9 +412,15 @@ impl App<'_> {
             Button::Keyboard(Key::Left) => self.snake.new_direction(Direction::Left),
             Button::Keyboard(Key::Right) => self.snake.new_direction(Direction::Right),
             Button::Keyboard(Key::Space) => self.snake = Snake::new(self.app_state.clone()),
-            // Button::Keyboard(Key::Return) => self.snake.poop += 1,
+            Button::Keyboard(Key::Return) => self.restart(),
             _ => {}
         }
+    }
+
+    fn restart(&mut self){
+        let mut app_state = self.app_state.borrow_mut();
+        app_state.map_objects = BTreeSet::new();
+        self.snake = Snake::new(self.app_state.clone());
     }
 }
 

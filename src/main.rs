@@ -12,11 +12,15 @@ use piston::window::WindowSettings;
 use piston::EventLoop;
 use rand::prelude::*;
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::BTreeSet;
+use std::collections::LinkedList;
 use std::ptr;
 use std::rc::Rc;
 
+const WINDOW_WIDTH: f64 = 400.0;
+const WINDOW_HEIGHT: f64 = 400.0;
 const HALF_CELL_SIZE: f64 = 5.0;
+
 const STEP_MULTIPLICATOR: f64 = 100.0;
 const GROW_MULTIPLICATOR: i64 = 4;
 const STEPS_WITHOUT_ROTATION: i64 = 15;
@@ -62,7 +66,7 @@ impl Direction {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ChainType {
     Snake,
     Poop,
@@ -81,11 +85,19 @@ impl ChainType {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 struct ChainLink {
     x: f64,
     y: f64,
     t: ChainType,
+}
+
+impl Eq for ChainLink {}
+impl Ord for ChainLink {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // in this business logic we cannot get NaN f64 values
+        self.partial_cmp(other).unwrap()
+    }
 }
 
 impl ChainLink {
@@ -118,7 +130,7 @@ impl ChainLink {
 #[derive(Clone)]
 struct Snake {
     direction: Direction,
-    chain: VecDeque<ChainLink>,
+    chain: LinkedList<ChainLink>,
     growth: i64,
     poop: i64,
     app_state: Rc<RefCell<AppState>>,
@@ -132,7 +144,7 @@ struct Snake {
 impl Snake {
     fn new(app_state: Rc<RefCell<AppState>>) -> Snake {
         let snake_chain = ChainLink::new(0.0, 0.0, ChainType::Snake);
-        let mut chain: VecDeque<ChainLink> = VecDeque::with_capacity(INITIAL_SIZE * 4);
+        let mut chain: LinkedList<ChainLink> = LinkedList::new();
 
         for _ in 0..INITIAL_SIZE {
             chain.push_back(snake_chain);
@@ -172,17 +184,11 @@ impl Snake {
         }
     }
 
-    fn make_step(&mut self, step_size: f64) {
-        if self.is_dead() || matches!(self.direction, Direction::None) {
-            return;
-        }
+    fn get_next_coords(&self, step_size: f64) -> (f64, f64) {
         let old_head = self.chain.front().unwrap();
 
         let mut new_y = old_head.y;
         let mut new_x = old_head.x;
-
-        self.cannot_rotate_steps -= 1;
-        self.make_deffered_rotation();
 
         match self.direction {
             Direction::Up => new_y -= step_size * STEP_MULTIPLICATOR,
@@ -190,8 +196,29 @@ impl Snake {
             Direction::Left => new_x -= step_size * STEP_MULTIPLICATOR,
             Direction::Right => new_x += step_size * STEP_MULTIPLICATOR,
             _ => {}
-        }
+        };
 
+        // teleport if snake trying to leave out of window
+        if new_x > WINDOW_WIDTH - HALF_CELL_SIZE {
+            new_x -= WINDOW_WIDTH;
+        } else if new_x < HALF_CELL_SIZE {
+            new_x += WINDOW_WIDTH;
+        } else if new_y > WINDOW_HEIGHT - HALF_CELL_SIZE {
+            new_y -= WINDOW_HEIGHT;
+        } else if new_y < HALF_CELL_SIZE {
+            new_y += WINDOW_HEIGHT;
+        }
+        (new_x, new_y)
+    }
+
+    fn make_step(&mut self, step_size: f64) {
+        if self.is_dead() || matches!(self.direction, Direction::None) {
+            return;
+        }
+        self.cannot_rotate_steps -= 1;
+        self.make_deffered_rotation();
+
+        let (new_x, new_y) = self.get_next_coords(step_size);
         self.chain
             .push_front(ChainLink::new(new_x, new_y, ChainType::Snake));
 
@@ -223,41 +250,45 @@ impl Snake {
     }
 
     fn find_something_to_eat(&mut self) {
-        let head = self.chain.front();
-        if let Some(head_ref) = head {
-            let mut app_state = self.app_state.borrow_mut();
+        let mut intersection: Option<ChainLink> = None;
+        let head = self.chain.front().unwrap();
 
-            if let Some(index) = app_state
+        {
+            let app_state = self.app_state.borrow();
+            let item_option = app_state
                 .all_items_on_map
                 .iter()
-                .position(|item| head_ref.intersects(item))
-            {
-                let finded_item = app_state.all_items_on_map.get(index).unwrap();
-                match finded_item.t {
-                    ChainType::Poop => self.growth += GROW_MULTIPLICATOR,
-                    ChainType::Poison => self.hp -= 1,
-                    ChainType::Heal => self.hp += 1,
-                    _ => {}
-                }
-                self.score += 1;
-                app_state.all_items_on_map.remove(index);
+                .find(|item| head.intersects(item));
+
+            if let Some(item) = item_option {
+                intersection = Some(item.clone());
             }
+        }
+        if let Some(item) = intersection {
+            match item.t {
+                ChainType::Poop => self.growth += GROW_MULTIPLICATOR,
+                ChainType::Poison => self.hp -= 1,
+                ChainType::Heal => self.hp += 1,
+                _ => {}
+            }
+            self.score += 1;
+            let mut app_state = self.app_state.borrow_mut();
+            app_state.all_items_on_map.remove(&item);
         }
     }
 
     fn check_collision_with_tail(&mut self) {
-        let head = self.chain.front();
-        if let Some(head_ref) = head {
-            if self
-                .chain
-                .iter()
-                .enumerate()
-                .filter(|&(i, _)| i > INVULNERABILITY_THRESHOLD)
-                .position(|(_, item)| !ptr::eq(head_ref, item) && head_ref.intersects(item))
-                .is_some()
-            {
-                self.hp = 0;
-            }
+        let head = self.chain.front().unwrap();
+
+        if self
+            .chain
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| i > INVULNERABILITY_THRESHOLD)
+            .position(|(_, item)| !ptr::eq(head, item) && head.intersects(item))
+            .is_some()
+        {
+            self.hp = 0;
         }
     }
 
@@ -276,18 +307,18 @@ impl Snake {
 
 #[derive(Clone)]
 struct AppState {
-    all_items_on_map: Vec<ChainLink>,
+    all_items_on_map: BTreeSet<ChainLink>,
 }
 
 impl AppState {
     fn new() -> AppState {
         AppState {
-            all_items_on_map: Vec::new(),
+            all_items_on_map: BTreeSet::new(),
         }
     }
 
     fn add_item_to_map(&mut self, item: ChainLink) {
-        self.all_items_on_map.push(item);
+        self.all_items_on_map.insert(item);
     }
 }
 
@@ -345,7 +376,6 @@ impl App<'_> {
             let header = format!("COPRO SNAKE {} HP", snake.hp);
             text(BLACK, 15, &header, font, c.transform.trans(30.0, 30.0), gl).unwrap();
 
-
             let score_header = format!("SCORE: {}", snake.score);
             text(
                 BLACK,
@@ -391,7 +421,7 @@ impl App<'_> {
 fn main() {
     let opengl = OpenGL::V3_2;
 
-    let mut window: Window = WindowSettings::new("snake", [400, 400])
+    let mut window: Window = WindowSettings::new("snake", [WINDOW_WIDTH, WINDOW_HEIGHT])
         .graphics_api(opengl)
         .exit_on_esc(true)
         .build()

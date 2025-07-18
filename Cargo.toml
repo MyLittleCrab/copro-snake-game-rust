@@ -2,6 +2,7 @@
 
 name = "copro-snake"
 version = "0.1.0"
+edition = "2021"
 authors = [
     "Roman A. Nosov <roman@nosoff.info>"
 ]

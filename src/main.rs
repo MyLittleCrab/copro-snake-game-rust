@@ -14,7 +14,6 @@ use rand::prelude::*;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::collections::LinkedList;
-use std::ptr;
 use std::rc::Rc;
 
 const WINDOW_WIDTH: f64 = 400.0;
@@ -33,7 +32,7 @@ const HEAL_DROP_CHANCE: i64 = 7; // %
 const HEAL_DROP_CHANCE_RANGE_TO: i64 = POISON_DROP_CHANCE_RANGE_NEXT + HEAL_DROP_CHANCE;
 // const HEAL_DROP_CHANCE_RANGE_NEXT: i64 = HEAL_DROP_CHANCE + 1;
 
-const POOPING_CHANCE: i64 = 8; // 0.x%
+const POOPING_CHANCE: i64 = 8; // 0.8%
 const INVULNERABILITY_THRESHOLD: usize = 50;
 
 const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
@@ -54,15 +53,13 @@ enum Direction {
 
 impl Direction {
     fn is_invert(&self, other: &Direction) -> bool {
-        if (matches!(self, Direction::Up) && matches!(other, Direction::Down))
-            || (matches!(self, Direction::Down) && matches!(other, Direction::Up))
-            || (matches!(self, Direction::Left) && matches!(other, Direction::Right))
-            || (matches!(self, Direction::Right) && matches!(other, Direction::Left))
-        {
-            return true;
-        } else {
-            return false;
-        }
+        matches!(
+            (self, other),
+            (Direction::Up, Direction::Down)
+                | (Direction::Down, Direction::Up)
+                | (Direction::Left, Direction::Right)
+                | (Direction::Right, Direction::Left)
+        )
     }
 }
 
@@ -90,6 +87,7 @@ struct ChainLink {
     x: f64,
     y: f64,
     t: ChainType,
+    id: u64, // Add unique ID for safe comparison
 }
 
 impl Eq for ChainLink {}
@@ -101,10 +99,11 @@ impl Ord for ChainLink {
 }
 
 impl ChainLink {
-    fn new(x: f64, y: f64, t: ChainType) -> ChainLink {
-        ChainLink { x, y, t }
+    fn new(x: f64, y: f64, t: ChainType, id: u64) -> ChainLink {
+        ChainLink { x, y, t, id }
     }
 
+    // Fixed rectangle intersection algorithm
     fn intersects(&self, other: &ChainLink) -> bool {
         let this_x1 = self.x - HALF_CELL_SIZE;
         let this_x2 = self.x + HALF_CELL_SIZE;
@@ -115,15 +114,8 @@ impl ChainLink {
         let other_y1 = other.y - HALF_CELL_SIZE;
         let other_y2 = other.y + HALF_CELL_SIZE;
 
-        if (other_x1 <= this_x2 && other_x1 >= this_x1
-            || other_x2 <= this_x2 && other_x2 >= this_x1)
-            && (other_y1 <= this_y2 && other_y1 >= this_y1
-                || other_y2 <= this_y2 && other_y2 >= this_y1)
-        {
-            return true;
-        } else {
-            return false;
-        }
+        // Proper rectangle intersection: check if rectangles DON'T overlap, then negate
+        !(this_x2 < other_x1 || other_x2 < this_x1 || this_y2 < other_y1 || other_y2 < this_y1)
     }
 }
 
@@ -139,19 +131,13 @@ struct Snake {
     deffered_rotation: Direction,
     rnd: ThreadRng,
     score: i64,
+    next_id: u64, // Counter for generating unique IDs
 }
 
 impl Snake {
     fn new(app_state: Rc<RefCell<AppState>>) -> Snake {
-        let snake_chain = ChainLink::new(0.0, 0.0, ChainType::Snake);
-        let mut chain: LinkedList<ChainLink> = LinkedList::new();
-
-        for _ in 0..INITIAL_SIZE {
-            chain.push_back(snake_chain);
-        }
-
-        Snake {
-            chain,
+        let mut snake = Snake {
+            chain: LinkedList::new(),
             direction: Direction::None,
             growth: 0,
             poop: 0,
@@ -161,7 +147,17 @@ impl Snake {
             cannot_rotate_steps: 0,
             deffered_rotation: Direction::None,
             score: 0,
+            next_id: 0,
+        };
+
+        // Initialize snake chain with unique IDs
+        for _ in 0..INITIAL_SIZE {
+            let snake_chain = ChainLink::new(0.0, 0.0, ChainType::Snake, snake.next_id);
+            snake.next_id += 1;
+            snake.chain.push_back(snake_chain);
         }
+
+        snake
     }
 
     fn new_direction(&mut self, direction: Direction) {
@@ -184,8 +180,8 @@ impl Snake {
         }
     }
 
-    fn get_next_coords(&self, step_size: f64) -> (f64, f64) {
-        let old_head = self.chain.front().unwrap();
+    fn get_next_coords(&self, step_size: f64) -> Option<(f64, f64)> {
+        let old_head = self.chain.front()?; // Safe access with Option
 
         let mut new_y = old_head.y;
         let mut new_x = old_head.x;
@@ -195,7 +191,7 @@ impl Snake {
             Direction::Down => new_y += step_size * STEP_MULTIPLICATOR,
             Direction::Left => new_x -= step_size * STEP_MULTIPLICATOR,
             Direction::Right => new_x += step_size * STEP_MULTIPLICATOR,
-            _ => {}
+            _ => return None,
         };
 
         // teleport if snake trying to leave out of window
@@ -208,7 +204,7 @@ impl Snake {
         } else if new_y < HALF_CELL_SIZE {
             new_y += WINDOW_HEIGHT;
         }
-        (new_x, new_y)
+        Some((new_x, new_y))
     }
 
     fn make_step(&mut self, step_size: f64) {
@@ -218,9 +214,15 @@ impl Snake {
         self.cannot_rotate_steps -= 1;
         self.make_deffered_rotation();
 
-        let (new_x, new_y) = self.get_next_coords(step_size);
-        self.chain
-            .push_front(ChainLink::new(new_x, new_y, ChainType::Snake));
+        // Safe coordinate calculation
+        let (new_x, new_y) = match self.get_next_coords(step_size) {
+            Some(coords) => coords,
+            None => return, // Skip step if no valid coordinates
+        };
+
+        let new_head = ChainLink::new(new_x, new_y, ChainType::Snake, self.next_id);
+        self.next_id += 1;
+        self.chain.push_front(new_head);
 
         self.find_something_to_eat();
         self.check_collision_with_tail();
@@ -234,8 +236,8 @@ impl Snake {
         } else if self.poop > 0 {
             self.poop -= 1;
 
-            let tail = self.chain.pop_back();
-            if let Some(mut tail_ref) = tail {
+            if let Some(mut tail) = self.chain.pop_back() {
+                // Fixed: use consistent random range generation (0..100)
                 let chain_type = match self.rnd.gen_range(0..100) {
                     0..=POISON_DROP_CHANCE => ChainType::Poison,
                     POISON_DROP_CHANCE_RANGE_NEXT..=HEAL_DROP_CHANCE_RANGE_TO => ChainType::Heal,
@@ -243,15 +245,20 @@ impl Snake {
                 };
 
                 let mut app_state = self.app_state.borrow_mut();
-                tail_ref.t = chain_type;
-                app_state.add_item_to_map(tail_ref);
+                tail.t = chain_type;
+                app_state.add_item_to_map(tail);
             }
         }
     }
 
     fn find_something_to_eat(&mut self) {
         let mut intersection: Option<ChainLink> = None;
-        let head = self.chain.front().unwrap();
+        
+        // Safe head access
+        let head = match self.chain.front() {
+            Some(h) => h,
+            None => return,
+        };
 
         {
             let app_state = self.app_state.borrow();
@@ -261,7 +268,7 @@ impl Snake {
                 .find(|item| head.intersects(item));
 
             if let Some(item) = item_option {
-                intersection = Some(item.clone());
+                intersection = Some(*item);
             }
         }
         if let Some(item) = intersection {
@@ -277,17 +284,21 @@ impl Snake {
         }
     }
 
+    // Fixed collision detection using unique IDs instead of pointer comparison
     fn check_collision_with_tail(&mut self) {
-        let head = self.chain.front().unwrap();
+        let head = match self.chain.front() {
+            Some(h) => h,
+            None => return,
+        };
 
-        if self
+        let collision_detected = self
             .chain
             .iter()
             .enumerate()
             .filter(|&(i, _)| i > INVULNERABILITY_THRESHOLD)
-            .position(|(_, item)| !ptr::eq(head, item) && head.intersects(item))
-            .is_some()
-        {
+            .any(|(_, item)| item.id != head.id && head.intersects(item));
+
+        if collision_detected {
             self.hp = 0;
         }
     }
@@ -297,9 +308,10 @@ impl Snake {
     }
 
     fn shit_generation(&mut self) {
-        let random: i64 = self.rnd.gen_range(1..1000);
+        // Fixed: use consistent random range generation (0..1000) and adjust comparison
+        let random: i64 = self.rnd.gen_range(0..1000);
 
-        if let 0..=POOPING_CHANCE = random {
+        if random <= POOPING_CHANCE {
             self.poop += 1;
         }
     }
@@ -330,18 +342,30 @@ struct App<'a> {
 }
 
 impl App<'_> {
-    fn new(gl: GlGraphics, snake: Snake, app_state: Rc<RefCell<AppState>>) -> App<'static> {
-        App {
+    fn new(gl: GlGraphics, snake: Snake, app_state: Rc<RefCell<AppState>>) -> Result<App<'static>, Box<dyn std::error::Error>> {
+        // Try multiple possible font paths for better compatibility
+        let font_paths = [
+            "./assets/PressStart2P-Regular.ttf",
+            "assets/PressStart2P-Regular.ttf",
+            "PressStart2P-Regular.ttf",
+        ];
+
+        let mut font_result = None;
+        for path in &font_paths {
+            if let Ok(font) = opengl_graphics::GlyphCache::new(path, (), TextureSettings::new()) {
+                font_result = Some(font);
+                break;
+            }
+        }
+
+        let font = font_result.ok_or("Could not load font file. Please ensure PressStart2P-Regular.ttf is in the assets directory.")?;
+
+        Ok(App {
             gl,
             snake,
             app_state,
-            font: opengl_graphics::GlyphCache::new(
-                "./assets/PressStart2P-Regular.ttf",
-                (),
-                TextureSettings::new(),
-            )
-            .unwrap(),
-        }
+            font,
+        })
     }
 
     fn render(&mut self, args: &RenderArgs) {
@@ -374,29 +398,27 @@ impl App<'_> {
             }
 
             let header = format!("COPRO SNAKE {} HP", snake.hp);
-            text(BLACK, 15, &header, font, c.transform.trans(30.0, 30.0), gl).unwrap();
+            let _ = text(BLACK, 15, &header, font, c.transform.trans(30.0, 30.0), gl);
 
             let score_header = format!("SCORE: {}", snake.score);
-            text(
+            let _ = text(
                 BLACK,
                 15,
                 &score_header,
                 font,
                 c.transform.trans(20.0, 380.0),
                 gl,
-            )
-            .unwrap();
+            );
 
             if snake.is_dead() {
-                text(
+                let _ = text(
                     BLACK,
                     30,
                     "GAME OVER",
                     font,
                     c.transform.trans(30.0, 70.0),
                     gl,
-                )
-                .unwrap();
+                );
             }
         });
     }
@@ -417,25 +439,24 @@ impl App<'_> {
         }
     }
 
-    fn restart(&mut self){
+    fn restart(&mut self) {
         let mut app_state = self.app_state.borrow_mut();
         app_state.map_objects = BTreeSet::new();
         self.snake = Snake::new(self.app_state.clone());
     }
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opengl = OpenGL::V3_2;
 
     let mut window: Window = WindowSettings::new("snake", [WINDOW_WIDTH, WINDOW_HEIGHT])
         .graphics_api(opengl)
         .exit_on_esc(true)
-        .build()
-        .unwrap();
+        .build()?;
 
     let app_state = Rc::new(RefCell::new(AppState::new()));
     let snake = Snake::new(app_state.clone());
-    let mut app = App::new(GlGraphics::new(opengl), snake, app_state);
+    let mut app = App::new(GlGraphics::new(opengl), snake, app_state)?;
 
     let mut settings = EventSettings::new();
     settings.set_max_fps(30);
@@ -454,4 +475,6 @@ fn main() {
             app.btn_press(&button);
         }
     }
+
+    Ok(())
 }
